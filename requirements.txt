@@ -3,3 +3,4 @@ yandex-music==2.1.1
 requests==2.31.0
 aiohttp
 psycopg2-binary
+pytz

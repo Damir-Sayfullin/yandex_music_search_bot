@@ -8,9 +8,13 @@ import asyncio
 import psycopg2
 import json
 from datetime import datetime
+import pytz
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from yandex_music import Client
+
+# Moscow timezone
+MSK = pytz.timezone('Europe/Moscow')
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -88,7 +92,9 @@ def log_bot_startup():
         if not conn:
             return
         cur = conn.cursor()
-        cur.execute('INSERT INTO bot_sessions (started_at) VALUES (CURRENT_TIMESTAMP)')
+        # Use MSK timezone for recording
+        msk_time = datetime.now(MSK)
+        cur.execute('INSERT INTO bot_sessions (started_at) VALUES (%s)', (msk_time,))
         conn.commit()
         cur.close()
         conn.close()
@@ -347,12 +353,20 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Bot session info
     if stats['last_restart']:
         restart_time = stats['last_restart']
-        uptime = datetime.now() - restart_time
+        # Convert to MSK if needed
+        if restart_time.tzinfo is None:
+            restart_time = pytz.utc.localize(restart_time).astimezone(MSK)
+        else:
+            restart_time = restart_time.astimezone(MSK)
+        
+        # Calculate uptime
+        now_msk = datetime.now(MSK)
+        uptime = now_msk - restart_time
         hours = uptime.seconds // 3600
         minutes = (uptime.seconds % 3600) // 60
         days = uptime.days
         
-        response += '⏱ ВРЕМЯ РАБОТЫ:\n'
+        response += '⏱ ВРЕМЯ РАБОТЫ (МСК):\n'
         response += f'🔄 Последний запуск: {restart_time.strftime("%d.%m.%Y %H:%M:%S")}\n'
         response += f'⌛ Время работы: {days}д {hours}ч {minutes}м\n\n'
     
