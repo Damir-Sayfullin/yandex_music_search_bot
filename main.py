@@ -23,21 +23,8 @@ db_connection = None
 zvuk_api_key = None
 
 def search_zvuk(query):
-    """Search music in Zvuk (Sber)"""
-    if not zvuk_api_key:
-        return None
-    try:
-        headers = {'X-API-Key': zvuk_api_key}
-        url = 'https://api.zvuk.com/v1/search'
-        params = {'q': query, 'type': 'tracks', 'limit': 10}
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            return data.get('data', {}).get('tracks', [])
-        return None
-    except Exception as e:
-        logger.error(f'Zvuk search error: {e}')
-        return None
+    """Search music in Zvuk (Sber) - temporarily disabled"""
+    return None
 
 def get_db_connection():
     try:
@@ -115,8 +102,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎵 Доступные команды:
 
 /start - Приветственное сообщение
-/search <название> - Поиск в Яндекс.Музыке и Звуке (10 результатов)
-/zvuk <название> - Поиск только в Звуке (Сбер)
+/search <название> - Поиск трека в Яндекс.Музыке (10 результатов)
 /my_stats - Ваша личная статистика
 /help - Показать это сообщение
 
@@ -147,66 +133,43 @@ async def search_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_text(f'🔍 Ищу: {query}...')
         
-        all_tracks = []
-        sources = []
+        if not yandex_client:
+            await update.message.reply_text('❌ Яндекс.Музыка не настроена.')
+            return
         
-        if yandex_client:
-            try:
-                search_result = yandex_client.search(query, type_='track')
-                if search_result and search_result.tracks:
-                    yandex_tracks = search_result.tracks.results[:10]
-                    all_tracks.extend(yandex_tracks)
-                    sources.append('🎵 Яндекс.Музыка')
-            except Exception as e:
-                logger.error(f'Yandex search error: {e}')
+        try:
+            search_result = yandex_client.search(query, type_='track')
+        except Exception as e:
+            logger.error(f'Yandex search error: {e}')
+            await update.message.reply_text(f'❌ Ошибка поиска: {str(e)}')
+            return
         
-        zvuk_tracks = search_zvuk(query)
-        if zvuk_tracks:
-            all_tracks.extend(zvuk_tracks)
-            sources.append('🔊 Звук')
-        
-        if not all_tracks:
+        if not search_result or not search_result.tracks:
             await update.message.reply_text('❌ Ничего не найдено. Попробуйте другой запрос.')
             return
         
-        all_tracks = all_tracks[:10]
-        log_search(user.id, query, len(all_tracks))
+        tracks = search_result.tracks.results[:10]
+        log_search(user.id, query, len(tracks))
         
-        sources_text = ' и '.join(sources) if sources else ''
-        response = f'🎵 Найдено в {sources_text}: {len(all_tracks)} треков\n\n'
+        response = f'🎵 Найдено: {len(tracks)} треков\n\n'
         
-        for i, track in enumerate(all_tracks, 1):
-            if isinstance(track, dict):
-                track_title = track.get('title', 'Unknown')
-                artists = ', '.join([a.get('name', 'Unknown') for a in track.get('artists', [])])
-                duration = track.get('duration', 0)
-                url = track.get('url', '')
-                source = '🔊 Звук'
-            else:
-                track_title = track.title
-                artists = ', '.join([artist.name for artist in track.artists])
-                duration = track.duration_ms // 1000 if track.duration_ms else 0
-                source = '🎵 Яндекс.Музыка'
-                url = None
-            
-            duration_seconds = duration // 1000 if duration > 1000 else duration
+        for i, track in enumerate(tracks, 1):
+            artists = ', '.join([artist.name for artist in track.artists])
+            duration_seconds = track.duration_ms // 1000 if track.duration_ms else 0
             minutes = duration_seconds // 60
             seconds = duration_seconds % 60
             
-            log_track_view(user.id, track_title, artists, query)
+            log_track_view(user.id, track.title, artists, query)
             
-            response += f'{i}. {artists} - {track_title}\n'
-            response += f'   ⏱ {minutes}:{seconds:02d} {source}\n'
+            response += f'{i}. {artists} - {track.title}\n'
+            response += f'   ⏱ {minutes}:{seconds:02d}\n'
             
-            if url and not isinstance(track, dict):
-                if track.albums and len(track.albums) > 0:
-                    album_id = track.albums[0].id
-                    track_id = track.id
-                    track_url = f'https://music.yandex.ru/album/{album_id}/track/{track_id}'
-                    response += f'   💿 {track.albums[0].title}\n'
-                    response += f'   🔗 {track_url}\n'
-            elif isinstance(track, dict) and url:
-                response += f'   🔗 {url}\n'
+            if track.albums and len(track.albums) > 0:
+                album_id = track.albums[0].id
+                track_id = track.id
+                track_url = f'https://music.yandex.ru/album/{album_id}/track/{track_id}'
+                response += f'   💿 {track.albums[0].title}\n'
+                response += f'   🔗 {track_url}\n'
             
             response += '\n'
         
@@ -222,70 +185,43 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     log_user(user.id, user.username, user.first_name, user.last_name)
     
+    if not yandex_client:
+        await update.message.reply_text('❌ Яндекс.Музыка не настроена.')
+        return
+    
     query = update.message.text
     
     try:
         await update.message.reply_text(f'🔍 Ищу: {query}...')
         
-        all_tracks = []
-        sources = []
+        search_result = yandex_client.search(query, type_='track')
         
-        if yandex_client:
-            try:
-                search_result = yandex_client.search(query, type_='track')
-                if search_result and search_result.tracks:
-                    yandex_tracks = search_result.tracks.results[:10]
-                    all_tracks.extend(yandex_tracks)
-                    sources.append('🎵 Яндекс.Музыка')
-            except Exception as e:
-                logger.error(f'Yandex search error: {e}')
-        
-        zvuk_tracks = search_zvuk(query)
-        if zvuk_tracks:
-            all_tracks.extend(zvuk_tracks)
-            sources.append('🔊 Звук')
-        
-        if not all_tracks:
+        if not search_result or not search_result.tracks:
             await update.message.reply_text('❌ Ничего не найдено. Попробуйте другой запрос.')
             return
         
-        all_tracks = all_tracks[:10]
-        log_search(user.id, query, len(all_tracks))
+        tracks = search_result.tracks.results[:10]
+        log_search(user.id, query, len(tracks))
         
-        sources_text = ' и '.join(sources) if sources else ''
-        response = f'🎵 Найдено в {sources_text}:\n\n'
+        response = f'🎵 Найдено: {len(tracks)} треков\n\n'
         
-        for i, track in enumerate(all_tracks, 1):
-            if isinstance(track, dict):
-                track_title = track.get('title', 'Unknown')
-                artists = ', '.join([a.get('name', 'Unknown') for a in track.get('artists', [])])
-                duration = track.get('duration', 0)
-                url = track.get('url', '')
-                source = '🔊 Звук'
-            else:
-                track_title = track.title
-                artists = ', '.join([artist.name for artist in track.artists])
-                duration = track.duration_ms // 1000 if track.duration_ms else 0
-                source = '🎵 Яндекс.Музыка'
-                url = None
-            
-            duration_seconds = duration // 1000 if duration > 1000 else duration
+        for i, track in enumerate(tracks, 1):
+            artists = ', '.join([artist.name for artist in track.artists])
+            duration_seconds = track.duration_ms // 1000 if track.duration_ms else 0
             minutes = duration_seconds // 60
             seconds = duration_seconds % 60
             
-            log_track_view(user.id, track_title, artists, query)
+            log_track_view(user.id, track.title, artists, query)
             
-            response += f'{i}. {artists} - {track_title}\n'
-            response += f'   ⏱ {minutes}:{seconds:02d} {source}\n'
+            response += f'{i}. {artists} - {track.title}\n'
+            response += f'   ⏱ {minutes}:{seconds:02d}\n'
             
-            if url and not isinstance(track, dict):
-                if track.albums and len(track.albums) > 0:
-                    album_id = track.albums[0].id
-                    track_id = track.id
-                    track_url = f'https://music.yandex.ru/album/{album_id}/track/{track_id}'
-                    response += f'   🔗 {track_url}\n'
-            elif isinstance(track, dict) and url:
-                response += f'   🔗 {url}\n'
+            if track.albums and len(track.albums) > 0:
+                album_id = track.albums[0].id
+                track_id = track.id
+                track_url = f'https://music.yandex.ru/album/{album_id}/track/{track_id}'
+                response += f'   💿 {track.albums[0].title}\n'
+                response += f'   🔗 {track_url}\n'
             
             response += '\n'
         
@@ -580,7 +516,6 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("search", search_music))
-    application.add_handler(CommandHandler("zvuk", zvuk_search))
     application.add_handler(CommandHandler("admin_stats", admin_stats))
     application.add_handler(CommandHandler("my_stats", my_stats))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
