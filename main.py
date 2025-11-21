@@ -92,11 +92,8 @@ def log_bot_startup():
         if not conn:
             return
         cur = conn.cursor()
-        # Record current time in MSK timezone
-        cur.execute("""
-            INSERT INTO bot_sessions (started_at) 
-            VALUES (NOW() AT TIME ZONE 'Europe/Moscow')
-        """)
+        # Record current UTC time with explicit timezone
+        cur.execute("INSERT INTO bot_sessions (started_at) VALUES (NOW() AT TIME ZONE 'UTC')")
         conn.commit()
         cur.close()
         conn.close()
