@@ -134,9 +134,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admin_id = os.getenv('ADMIN_USER_ID')
     user_id = update.message.from_user.id
-    is_admin = admin_id and int(admin_id) == user_id
+    user_is_admin = is_admin(user_id)
     
     log_action(user_id, 'команда /help')
     
@@ -146,10 +145,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text += "/my_stats - Ваша личная статистика\n"
     help_text += "/help - Показать это сообщение\n"
     
-    if is_admin:
+    if user_is_admin:
         help_text += "\n👑 АДМИНИСТРАТОР:\n"
         help_text += "/admin_stats - Общая статистика бота\n"
         help_text += "/bot_uptime - Время запуска и работа бота (МСК)\n"
+        help_text += "/user_actions <user_id или @username> - Действия пользователя\n"
+        help_text += "/add_admin <user_id или @username> - Добавить администратора\n"
+        help_text += "/remove_admin <user_id или @username> - Удалить администратора\n"
     
     help_text += "\nПросто отправьте название трека или исполнителя, и я найду музыку!\n\n"
     help_text += "Примеры:\n"
