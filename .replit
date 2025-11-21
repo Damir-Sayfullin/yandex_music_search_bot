@@ -36,3 +36,4 @@ externalPort = 80
 
 [userenv.shared]
 ADMIN_USER_ID = "933698505"
+ZVUK_API_KEY = "06920da1c0234cf08000d6e6c9179a02"
