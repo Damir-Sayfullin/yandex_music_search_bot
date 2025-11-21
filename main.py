@@ -92,8 +92,12 @@ def log_bot_startup():
         if not conn:
             return
         cur = conn.cursor()
-        # Record current UTC time with explicit timezone
-        cur.execute("INSERT INTO bot_sessions (started_at) VALUES (NOW() AT TIME ZONE 'UTC')")
+        # Get current UTC time from Python and store as ISO string
+        utc_now = datetime.now(pytz.UTC)
+        cur.execute(
+            "INSERT INTO bot_sessions (started_at) VALUES (%s)",
+            (utc_now,)
+        )
         conn.commit()
         cur.close()
         conn.close()
@@ -291,15 +295,20 @@ def get_admin_stats():
         cur.execute('SELECT COUNT(*) FROM users WHERE total_searches >= 5')
         stats['active_users'] = cur.fetchone()[0]
         
-        # Get last bot session (convert to MSK for display)
+        # Get last bot session and convert to MSK in Python
         cur.execute("""
-            SELECT started_at AT TIME ZONE 'Europe/Moscow' 
+            SELECT started_at 
             FROM bot_sessions 
             ORDER BY started_at DESC LIMIT 1
         """)
         session_result = cur.fetchone()
         if session_result:
-            stats['last_restart'] = session_result[0]
+            # Convert UTC time to MSK
+            utc_time = session_result[0]
+            if utc_time.tzinfo is None:
+                utc_time = pytz.UTC.localize(utc_time)
+            msk_time = utc_time.astimezone(MSK)
+            stats['last_restart'] = msk_time
         else:
             stats['last_restart'] = None
         
