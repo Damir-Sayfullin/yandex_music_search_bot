@@ -70,6 +70,23 @@ def log_search(user_id, query, results_count):
     except Exception as e:
         logger.error(f'Error logging search: {e}')
 
+def log_action(user_id, action_type, action_details=None):
+    """Log user action to user_actions table"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return
+        cur = conn.cursor()
+        cur.execute(
+            'INSERT INTO user_actions (user_id, action_type, action_details) VALUES (%s, %s, %s)',
+            (user_id, action_type, action_details)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f'Error logging action: {e}')
+
 def log_track_view(user_id, track_title, track_artists, query):
     try:
         conn = get_db_connection()
@@ -108,6 +125,7 @@ def log_bot_startup():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     log_user(user.id, user.username, user.first_name, user.last_name)
+    log_action(user.id, 'команда /start')
     
     await update.message.reply_text(
         '🎵 Привет! Я бот для поиска музыки в Яндекс.Музыке\n\n'
@@ -119,6 +137,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_id = os.getenv('ADMIN_USER_ID')
     user_id = update.message.from_user.id
     is_admin = admin_id and int(admin_id) == user_id
+    
+    log_action(user_id, 'команда /help')
     
     help_text = "🎵 Доступные команды:\n\n"
     help_text += "/start - Приветственное сообщение\n"
@@ -169,6 +189,7 @@ async def search_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         tracks = search_result.tracks.results[:10]
         log_search(user.id, query, len(tracks))
+        log_action(user.id, 'поиск /search', query)
         
         response = f'🎵 Найдено: {len(tracks)} треков\n\n'
         
@@ -202,6 +223,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user = update.message.from_user
     log_user(user.id, user.username, user.first_name, user.last_name)
+    log_action(user.id, 'поиск (текст)', update.message.text)
     
     if not yandex_client:
         await update.message.reply_text('❌ Яндекс.Музыка не настроена.')
@@ -334,24 +356,17 @@ def get_admin_stats():
         # Get top 10 users with their last interaction info
         cur.execute("""
             SELECT u.user_id, u.username, u.first_name, u.total_uses, u.total_searches,
-                   COALESCE(last_interactions.last_time, u.created_at) as last_interaction,
-                   last_interactions.action_type,
-                   last_interactions.query_text
+                   ua.created_at as last_interaction,
+                   ua.action_type,
+                   ua.action_details
             FROM users u
-            LEFT JOIN (
-                SELECT user_id, created_at as last_time, 'поиск' as action_type, query as query_text
-                FROM searches
-                UNION ALL
-                SELECT user_id, created_at, 'просмотр трека', query
-                FROM track_views
-            ) last_interactions ON u.user_id = last_interactions.user_id
-              AND last_interactions.last_time = (
-                SELECT MAX(time) FROM (
-                  SELECT user_id, created_at as time FROM searches WHERE user_id = u.user_id
-                  UNION ALL
-                  SELECT user_id, created_at FROM track_views WHERE user_id = u.user_id
-                ) t WHERE t.user_id = u.user_id
-              )
+            LEFT JOIN LATERAL (
+                SELECT action_type, action_details, created_at
+                FROM user_actions
+                WHERE user_id = u.user_id
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) ua ON true
             ORDER BY u.total_uses DESC 
             LIMIT 10
         """)
@@ -506,6 +521,8 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     user_id = user.id
+    
+    log_action(user_id, 'команда /my_stats')
     
     try:
         conn = get_db_connection()
