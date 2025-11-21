@@ -902,11 +902,22 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cur.close()
         conn.close()
         
+        # Convert created_at to MSK
+        if created_at:
+            if created_at.tzinfo is None:
+                created_at_utc = pytz.UTC.localize(created_at)
+            else:
+                created_at_utc = created_at
+            created_at_msk = created_at_utc.astimezone(MSK)
+            created_at_str = created_at_msk.strftime("%d.%m.%Y")
+        else:
+            created_at_str = "неизвестно"
+        
         response = f'📊 ВАШ ПРОФИЛЬ И СТАТИСТИКА\n\n'
         response += f'👤 {first_name}\n'
         if username:
             response += f'📱 @{username}\n'
-        response += f'📅 На боте с: {created_at.strftime("%d.%m.%Y") if created_at else "неизвестно"}\n\n'
+        response += f'📅 На боте с: {created_at_str}\n\n'
         
         response += '📈 АКТИВНОСТЬ:\n'
         response += f'💬 Всего взаимодействий: {total_uses}\n'
