@@ -115,7 +115,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎵 Доступные команды:
 
 /start - Приветственное сообщение
-/search <название> - Поиск трека (10 результатов)
+/search <название> - Поиск в Яндекс.Музыке и Звуке (10 результатов)
+/zvuk <название> - Поиск только в Звуке (Сбер)
 /my_stats - Ваша личная статистика
 /help - Показать это сообщение
 
@@ -293,6 +294,58 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f'Ошибка поиска: {e}')
         await update.message.reply_text(f'❌ Ошибка при поиске: {str(e)}')
+
+async def zvuk_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    log_user(user.id, user.username, user.first_name, user.last_name)
+    
+    query = ' '.join(context.args) if context.args else None
+    
+    if not query:
+        await update.message.reply_text(
+            'Пожалуйста, укажите что искать:\n'
+            '/zvuk Название трека или исполнителя'
+        )
+        return
+    
+    try:
+        await update.message.reply_text(f'🔊 Ищу в Звуке: {query}...')
+        
+        zvuk_tracks = search_zvuk(query)
+        
+        if not zvuk_tracks:
+            await update.message.reply_text('❌ Ничего не найдено в Звуке. Попробуйте другой запрос.')
+            return
+        
+        log_search(user.id, query, len(zvuk_tracks))
+        
+        response = f'🔊 Найдено в Звуке: {len(zvuk_tracks)} треков\n\n'
+        
+        for i, track in enumerate(zvuk_tracks, 1):
+            track_title = track.get('title', 'Unknown')
+            artists = ', '.join([a.get('name', 'Unknown') for a in track.get('artists', [])])
+            duration = track.get('duration', 0)
+            url = track.get('url', '')
+            
+            duration_seconds = duration // 1000 if duration > 1000 else duration
+            minutes = duration_seconds // 60
+            seconds = duration_seconds % 60
+            
+            log_track_view(user.id, track_title, artists, query)
+            
+            response += f'{i}. {artists} - {track_title}\n'
+            response += f'   ⏱ {minutes}:{seconds:02d}\n'
+            
+            if url:
+                response += f'   🔗 {url}\n'
+            
+            response += '\n'
+        
+        await update.message.reply_text(response)
+        
+    except Exception as e:
+        logger.error(f'Zvuk search error: {e}')
+        await update.message.reply_text(f'❌ Ошибка при поиске в Звуке: {str(e)}')
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f'Update {update} caused error {context.error}')
@@ -527,6 +580,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("search", search_music))
+    application.add_handler(CommandHandler("zvuk", zvuk_search))
     application.add_handler(CommandHandler("admin_stats", admin_stats))
     application.add_handler(CommandHandler("my_stats", my_stats))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
