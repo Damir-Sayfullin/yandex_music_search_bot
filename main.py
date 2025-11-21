@@ -289,6 +289,44 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f'Update {update} caused error {context.error}')
 
+def get_user_actions(user_id, limit=50):
+    """Get user actions with timestamps"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return None
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT username, first_name, total_uses, total_searches
+            FROM users
+            WHERE user_id = %s
+        """, (user_id,))
+        user_info = cur.fetchone()
+        
+        if not user_info:
+            return None
+        
+        cur.execute("""
+            SELECT action_type, action_details, created_at
+            FROM user_actions
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+            LIMIT %s
+        """, (user_id, limit))
+        
+        actions = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        return {
+            'user_info': user_info,
+            'actions': actions
+        }
+    except Exception as e:
+        logger.error(f'Error getting user actions: {e}')
+        return None
+
 def get_bot_uptime():
     """Get bot startup time and calculate uptime"""
     try:
@@ -410,6 +448,56 @@ def get_admin_stats():
     except Exception as e:
         logger.error(f'Error getting admin stats: {e}')
         return None
+
+async def user_actions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin_id = os.getenv('ADMIN_USER_ID')
+    user_id = update.message.from_user.id
+    
+    if not admin_id or int(admin_id) != user_id:
+        await update.message.reply_text('❌ У вас нет доступа к этой команде.')
+        logger.warning(f'Unauthorized user_actions access attempt by user {user_id}')
+        return
+    
+    if not context.args:
+        await update.message.reply_text('Использование: /user_actions <user_id>')
+        return
+    
+    try:
+        target_user_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text('❌ user_id должен быть числом.')
+        return
+    
+    user_actions = get_user_actions(target_user_id, limit=30)
+    if not user_actions:
+        await update.message.reply_text('❌ Пользователь не найден.')
+        return
+    
+    username, first_name, total_uses, total_searches = user_actions['user_info']
+    actions = user_actions['actions']
+    
+    username_str = f'@{username}' if username else first_name
+    response = f'📊 ДЕЙСТВИЯ ПОЛЬЗОВАТЕЛЯ: {username_str}\n\n'
+    response += f'💬 Всего взаимодействий: {total_uses}\n'
+    response += f'🔍 Всего поисков: {total_searches}\n\n'
+    response += '='*50 + '\n'
+    response += '📝 ПОСЛЕДНИЕ ДЕЙСТВИЯ (МСК, макс. 30):\n\n'
+    
+    for i, (action_type, action_details, created_at) in enumerate(actions, 1):
+        if created_at.tzinfo is None:
+            created_at_utc = pytz.UTC.localize(created_at)
+        else:
+            created_at_utc = created_at
+        created_at_msk = created_at_utc.astimezone(MSK)
+        time_str = created_at_msk.strftime("%d.%m.%Y %H:%M:%S")
+        
+        response += f'{i}. {time_str} - {action_type}'
+        if action_details:
+            response += f': "{action_details}"'
+        response += '\n'
+    
+    await update.message.reply_text(response)
+    logger.info(f'User actions for {target_user_id} requested by admin {user_id}')
 
 async def bot_uptime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_id = os.getenv('ADMIN_USER_ID')
@@ -689,6 +777,7 @@ def main():
     application.add_handler(CommandHandler("search", search_music))
     application.add_handler(CommandHandler("admin_stats", admin_stats))
     application.add_handler(CommandHandler("bot_uptime", bot_uptime))
+    application.add_handler(CommandHandler("user_actions", user_actions_cmd))
     application.add_handler(CommandHandler("my_stats", my_stats))
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
