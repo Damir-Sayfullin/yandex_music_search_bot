@@ -150,6 +150,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         help_text += "/admin_stats - Общая статистика бота\n"
         help_text += "/bot_uptime - Время запуска и работа бота (МСК)\n"
         help_text += "/user_actions <user_id или @username> - Действия пользователя\n"
+        help_text += "/list_users - Список всех пользователей и ролей\n"
         help_text += "/add_admin <user_id или @username> - Добавить администратора\n"
         help_text += "/remove_admin <user_id или @username> - Удалить администратора\n"
     
@@ -371,6 +372,45 @@ def remove_admin_from_db(target_user_id):
         logger.error(f'Error removing admin: {e}')
         return False
 
+def get_all_users():
+    """Get all users with their roles"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return None
+        cur = conn.cursor()
+        main_admin_id = os.getenv('ADMIN_USER_ID')
+        
+        cur.execute("""
+            SELECT user_id, username, first_name, total_uses, total_searches, created_at
+            FROM users
+            ORDER BY total_uses DESC
+        """)
+        users = cur.fetchall()
+        
+        # Get all admins from DB
+        cur.execute("SELECT user_id FROM admins")
+        admin_ids = set(row[0] for row in cur.fetchall())
+        
+        cur.close()
+        conn.close()
+        
+        users_with_roles = []
+        for user in users:
+            user_id = user[0]
+            if main_admin_id and int(main_admin_id) == user_id:
+                role = 'Главный админ 👑'
+            elif user_id in admin_ids:
+                role = 'Админ 🔑'
+            else:
+                role = 'Пользователь 👤'
+            users_with_roles.append((user, role))
+        
+        return users_with_roles
+    except Exception as e:
+        logger.error(f'Error getting all users: {e}')
+        return None
+
 def get_user_actions(user_id, limit=50):
     """Get user actions with timestamps"""
     try:
@@ -530,6 +570,40 @@ def get_admin_stats():
     except Exception as e:
         logger.error(f'Error getting admin stats: {e}')
         return None
+
+async def list_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text('❌ У вас нет доступа к этой команде.')
+        logger.warning(f'Unauthorized list_users access attempt by user {user_id}')
+        return
+    
+    log_action(user_id, 'команда /list_users')
+    
+    users = get_all_users()
+    if not users:
+        await update.message.reply_text('❌ Ошибка при получении списка пользователей.')
+        return
+    
+    response = f'👥 СПИСОК ВСЕХ ПОЛЬЗОВАТЕЛЕЙ ({len(users)})\n\n'
+    response += '='*50 + '\n\n'
+    
+    for i, (user_data, role) in enumerate(users, 1):
+        uid = user_data[0]
+        username = user_data[1]
+        first_name = user_data[2]
+        total_uses = user_data[3]
+        total_searches = user_data[4]
+        
+        username_str = f'@{username}' if username else first_name
+        response += f'{i}. {username_str}\n'
+        response += f'   ID: {uid}\n'
+        response += f'   Роль: {role}\n'
+        response += f'   Взаимодействий: {total_uses} | Поисков: {total_searches}\n\n'
+    
+    await update.message.reply_text(response)
+    logger.info(f'List users requested by admin {user_id}')
 
 async def user_actions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -936,6 +1010,7 @@ def main():
     application.add_handler(CommandHandler("admin_stats", admin_stats))
     application.add_handler(CommandHandler("bot_uptime", bot_uptime))
     application.add_handler(CommandHandler("user_actions", user_actions_cmd))
+    application.add_handler(CommandHandler("list_users", list_users_cmd))
     application.add_handler(CommandHandler("add_admin", add_admin_cmd))
     application.add_handler(CommandHandler("remove_admin", remove_admin_cmd))
     application.add_handler(CommandHandler("my_stats", my_stats))
