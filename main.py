@@ -610,6 +610,8 @@ async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text('❌ Пользователь не найден.')
             return
     
+    log_action(user_id, 'команда /add_admin', str(target_user_id))
+    
     if add_admin_to_db(target_user_id, user_id):
         await update.message.reply_text(f'✅ Пользователь {target_user_id} добавлен в админы.')
         logger.info(f'User {target_user_id} added to admins by {user_id}')
@@ -640,6 +642,8 @@ async def remove_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text('❌ Пользователь не найден.')
             return
     
+    log_action(user_id, 'команда /remove_admin', str(target_user_id))
+    
     # Prevent removing main admin
     if main_admin_id and int(main_admin_id) == target_user_id:
         await update.message.reply_text('❌ Нельзя удалить главного администратора!')
@@ -658,6 +662,8 @@ async def bot_uptime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('❌ У вас нет доступа к этой команде.')
         logger.warning(f'Unauthorized bot_uptime access attempt by user {user_id}')
         return
+    
+    log_action(user_id, 'команда /bot_uptime')
     
     uptime_data = get_bot_uptime()
     if not uptime_data:
@@ -687,6 +693,8 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('❌ У вас нет доступа к этой команде.')
         logger.warning(f'Unauthorized admin access attempt by user {user_id}')
         return
+    
+    log_action(user_id, 'команда /admin_stats')
     
     stats = get_admin_stats()
     if not stats:
