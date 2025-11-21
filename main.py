@@ -82,6 +82,20 @@ def log_track_view(user_id, track_title, track_artists, query):
     except Exception as e:
         logger.error(f'Error logging track view: {e}')
 
+def log_bot_startup():
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return
+        cur = conn.cursor()
+        cur.execute('INSERT INTO bot_sessions (started_at) VALUES (CURRENT_TIMESTAMP)')
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info('Bot startup logged to database')
+    except Exception as e:
+        logger.error(f'Error logging bot startup: {e}')
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     log_user(user.id, user.username, user.first_name, user.last_name)
@@ -272,6 +286,14 @@ def get_admin_stats():
         cur.execute('SELECT COUNT(*) FROM users WHERE total_searches >= 5')
         stats['active_users'] = cur.fetchone()[0]
         
+        # Get last bot session
+        cur.execute('SELECT started_at FROM bot_sessions ORDER BY started_at DESC LIMIT 1')
+        session_result = cur.fetchone()
+        if session_result:
+            stats['last_restart'] = session_result[0]
+        else:
+            stats['last_restart'] = None
+        
         cur.execute("""
             SELECT user_id, username, first_name, total_uses, total_searches 
             FROM users 
@@ -321,6 +343,19 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     response = '📊 ОБЩАЯ СТАТИСТИКА БОТА\n\n'
+    
+    # Bot session info
+    if stats['last_restart']:
+        restart_time = stats['last_restart']
+        uptime = datetime.now() - restart_time
+        hours = uptime.seconds // 3600
+        minutes = (uptime.seconds % 3600) // 60
+        days = uptime.days
+        
+        response += '⏱ ВРЕМЯ РАБОТЫ:\n'
+        response += f'🔄 Последний запуск: {restart_time.strftime("%d.%m.%Y %H:%M:%S")}\n'
+        response += f'⌛ Время работы: {days}д {hours}ч {minutes}м\n\n'
+    
     response += '📈 Ключевые метрики:\n'
     response += f'👥 Всего пользователей: {stats["total_users"]}\n'
     response += f'🟢 Активных пользователей (5+ поисков): {stats["active_users"]}\n'
@@ -509,6 +544,9 @@ def main():
     
     ping_thread = threading.Thread(target=self_ping, daemon=True)
     ping_thread.start()
+    
+    # Log bot startup to database
+    log_bot_startup()
     
     application = Application.builder().token(token).build()
     
