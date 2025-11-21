@@ -116,21 +116,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = """
-🎵 Доступные команды:
-
-/start - Приветственное сообщение
-/search <название> - Поиск в Яндекс.Музыке (10 результатов)
-/my_stats - Ваша личная статистика
-/help - Показать это сообщение
-
-Просто отправьте название трека или исполнителя, и я найду музыку!
-
-Примеры:
-• Imagine Dragons
-• Believer
-• Metallica - Nothing Else Matters
-    """
+    admin_id = os.getenv('ADMIN_USER_ID')
+    user_id = update.message.from_user.id
+    is_admin = admin_id and int(admin_id) == user_id
+    
+    help_text = "🎵 Доступные команды:\n\n"
+    help_text += "/start - Приветственное сообщение\n"
+    help_text += "/search <название> - Поиск в Яндекс.Музыке (10 результатов)\n"
+    help_text += "/my_stats - Ваша личная статистика\n"
+    help_text += "/help - Показать это сообщение\n"
+    
+    if is_admin:
+        help_text += "\n👑 АДМИНИСТРАТОР:\n"
+        help_text += "/admin_stats - Общая статистика бота\n"
+        help_text += "/bot_uptime - Время запуска и работа бота (МСК)\n"
+    
+    help_text += "\nПросто отправьте название трека или исполнителя, и я найду музыку!\n\n"
+    help_text += "Примеры:\n"
+    help_text += "• Imagine Dragons\n"
+    help_text += "• Believer\n"
+    help_text += "• Metallica - Nothing Else Matters"
+    
     await update.message.reply_text(help_text)
 
 async def search_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -261,6 +267,36 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f'Update {update} caused error {context.error}')
 
+def get_bot_uptime():
+    """Get bot startup time and calculate uptime"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return None
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT started_at 
+            FROM bot_sessions 
+            ORDER BY started_at DESC LIMIT 1
+        """)
+        session_result = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if not session_result:
+            return None
+        
+        utc_time = session_result[0]
+        if utc_time.tzinfo is None:
+            utc_time = pytz.UTC.localize(utc_time)
+        msk_time = utc_time.astimezone(MSK)
+        
+        return {'started_at': msk_time}
+    except Exception as e:
+        logger.error(f'Error getting bot uptime: {e}')
+        return None
+
 def get_admin_stats():
     try:
         conn = get_db_connection()
@@ -294,23 +330,6 @@ def get_admin_stats():
         
         cur.execute('SELECT COUNT(*) FROM users WHERE total_searches >= 5')
         stats['active_users'] = cur.fetchone()[0]
-        
-        # Get last bot session and convert to MSK in Python
-        cur.execute("""
-            SELECT started_at 
-            FROM bot_sessions 
-            ORDER BY started_at DESC LIMIT 1
-        """)
-        session_result = cur.fetchone()
-        if session_result:
-            # Convert UTC time to MSK
-            utc_time = session_result[0]
-            if utc_time.tzinfo is None:
-                utc_time = pytz.UTC.localize(utc_time)
-            msk_time = utc_time.astimezone(MSK)
-            stats['last_restart'] = msk_time
-        else:
-            stats['last_restart'] = None
         
         cur.execute("""
             SELECT user_id, username, first_name, total_uses, total_searches 
@@ -346,6 +365,36 @@ def get_admin_stats():
         logger.error(f'Error getting admin stats: {e}')
         return None
 
+async def bot_uptime(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin_id = os.getenv('ADMIN_USER_ID')
+    user_id = update.message.from_user.id
+    
+    if not admin_id or int(admin_id) != user_id:
+        await update.message.reply_text('❌ У вас нет доступа к этой команде.')
+        logger.warning(f'Unauthorized bot_uptime access attempt by user {user_id}')
+        return
+    
+    uptime_data = get_bot_uptime()
+    if not uptime_data:
+        await update.message.reply_text('❌ Ошибка при получении информации о боте.')
+        return
+    
+    started_at = uptime_data['started_at']
+    now_msk = datetime.now(MSK)
+    uptime = now_msk - started_at
+    
+    days = uptime.days
+    hours = uptime.seconds // 3600
+    minutes = (uptime.seconds % 3600) // 60
+    seconds = uptime.seconds % 60
+    
+    response = '⏱ ИНФОРМАЦИЯ О БОТЕ (МСК)\n\n'
+    response += f'🔄 Время запуска: {started_at.strftime("%d.%m.%Y %H:%M:%S")}\n'
+    response += f'⌛ Время работы: {days}д {hours}ч {minutes}м {seconds}с'
+    
+    await update.message.reply_text(response)
+    logger.info(f'Bot uptime requested by user {user_id}')
+
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_id = os.getenv('ADMIN_USER_ID')
     user_id = update.message.from_user.id
@@ -361,33 +410,6 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     response = '📊 ОБЩАЯ СТАТИСТИКА БОТА\n\n'
-    
-    # Bot session info
-    if stats['last_restart']:
-        restart_time = stats['last_restart']
-        # Handle timezone-aware datetime from database
-        if restart_time.tzinfo is not None:
-            restart_time_display = restart_time
-        else:
-            restart_time_display = pytz.utc.localize(restart_time).astimezone(MSK)
-        
-        # Calculate uptime (use timezone-aware now)
-        now_msk = datetime.now(MSK)
-        # If restart_time is naive, localize it to UTC first, then convert to MSK
-        if restart_time.tzinfo is None:
-            restart_time_aware = pytz.utc.localize(restart_time).astimezone(MSK)
-        else:
-            restart_time_aware = restart_time.astimezone(MSK) if restart_time.tzinfo else restart_time
-        
-        uptime = now_msk - restart_time_aware
-        hours = uptime.seconds // 3600
-        minutes = (uptime.seconds % 3600) // 60
-        days = uptime.days
-        
-        response += '⏱ ВРЕМЯ РАБОТЫ (МСК):\n'
-        response += f'🔄 Последний запуск: {restart_time_display.strftime("%d.%m.%Y %H:%M:%S")}\n'
-        response += f'⌛ Время работы: {days}д {hours}ч {minutes}м\n\n'
-    
     response += '📈 Ключевые метрики:\n'
     response += f'👥 Всего пользователей: {stats["total_users"]}\n'
     response += f'🟢 Активных пользователей (5+ поисков): {stats["active_users"]}\n'
@@ -586,6 +608,7 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("search", search_music))
     application.add_handler(CommandHandler("admin_stats", admin_stats))
+    application.add_handler(CommandHandler("bot_uptime", bot_uptime))
     application.add_handler(CommandHandler("my_stats", my_stats))
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
