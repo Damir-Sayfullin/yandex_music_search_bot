@@ -331,13 +331,44 @@ def get_admin_stats():
         cur.execute('SELECT COUNT(*) FROM users WHERE total_searches >= 5')
         stats['active_users'] = cur.fetchone()[0]
         
+        # Get top 10 users with their last interaction info
         cur.execute("""
-            SELECT user_id, username, first_name, total_uses, total_searches 
-            FROM users 
-            ORDER BY total_uses DESC 
+            SELECT u.user_id, u.username, u.first_name, u.total_uses, u.total_searches,
+                   COALESCE(last_interactions.last_time, u.created_at) as last_interaction,
+                   last_interactions.action_type,
+                   last_interactions.query_text
+            FROM users u
+            LEFT JOIN (
+                SELECT user_id, created_at as last_time, 'поиск' as action_type, query as query_text
+                FROM searches
+                UNION ALL
+                SELECT user_id, created_at, 'просмотр трека', query
+                FROM track_views
+            ) last_interactions ON u.user_id = last_interactions.user_id
+              AND last_interactions.last_time = (
+                SELECT MAX(time) FROM (
+                  SELECT user_id, created_at as time FROM searches WHERE user_id = u.user_id
+                  UNION ALL
+                  SELECT user_id, created_at FROM track_views WHERE user_id = u.user_id
+                ) t WHERE t.user_id = u.user_id
+              )
+            ORDER BY u.total_uses DESC 
             LIMIT 10
         """)
         stats['top_users'] = cur.fetchall()
+        
+        # Get last search query for each top user
+        top_user_ids = [user[0] for user in stats['top_users']]
+        stats['user_last_searches'] = {}
+        for uid in top_user_ids:
+            cur.execute("""
+                SELECT query FROM searches 
+                WHERE user_id = %s 
+                ORDER BY created_at DESC 
+                LIMIT 1
+            """, (uid,))
+            result = cur.fetchone()
+            stats['user_last_searches'][uid] = result[0] if result else None
         
         cur.execute("""
             SELECT query, COUNT(*) as count 
@@ -421,12 +452,44 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response += '\n' + '='*50 + '\n\n'
     
     response += '🏆 ТОП 10 АКТИВНЫХ ПОЛЬЗОВАТЕЛЕЙ:\n'
-    for i, (uid, username, first_name, uses, searches) in enumerate(stats['top_users'], 1):
+    for i, user_data in enumerate(stats['top_users'], 1):
+        uid = user_data[0]
+        username = user_data[1]
+        first_name = user_data[2]
+        uses = user_data[3]
+        searches = user_data[4]
+        last_interaction = user_data[5]
+        action_type = user_data[6]
+        query_text = user_data[7]
+        
         username_str = f'@{username}' if username else f'{first_name}'
         response += f'{i}. {username_str}\n'
         response += f'   💬 {uses} взаимодействий | 🔍 {searches} поисков\n'
+        
+        # Format last interaction time
+        if last_interaction:
+            if last_interaction.tzinfo is None:
+                last_interaction_utc = pytz.UTC.localize(last_interaction)
+            else:
+                last_interaction_utc = last_interaction
+            last_interaction_msk = last_interaction_utc.astimezone(MSK)
+            last_interaction_str = last_interaction_msk.strftime("%d.%m.%Y %H:%M")
+        else:
+            last_interaction_str = "неизвестно"
+        
+        response += f'   📅 Последнее: {last_interaction_str}'
+        if action_type:
+            response += f' ({action_type})'
+        response += '\n'
+        
+        # Add last search query if available
+        last_search = stats['user_last_searches'].get(uid)
+        if last_search:
+            response += f'   🔍 Последний поиск: "{last_search}"\n'
+        
+        response += '\n'
     
-    response += '\n' + '='*50 + '\n\n'
+    response += '='*50 + '\n\n'
     response += '🔥 ТОП 10 ПОПУЛЯРНЫХ ЗАПРОСОВ:\n'
     for i, (query, count) in enumerate(stats['popular_queries'], 1):
         response += f'{i}. "{query}" - {count} поиск(ов)\n'
