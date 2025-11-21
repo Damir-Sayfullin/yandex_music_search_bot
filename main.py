@@ -2,6 +2,7 @@ import os
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from yandex_music import Client
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -9,30 +10,130 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+yandex_client = None
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        'Привет! Я простой Telegram бот. 👋\n\n'
+        '🎵 Привет! Я бот для поиска музыки в Яндекс.Музыке\n\n'
+        'Отправьте мне название трека или исполнителя, и я найду музыку для вас!\n\n'
         'Используйте /help чтобы увидеть доступные команды.'
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = """
-Доступные команды:
+🎵 Доступные команды:
+
 /start - Приветственное сообщение
+/search <название> - Поиск трека
 /help - Показать это сообщение
 
-Просто напишите мне любое сообщение, и я отвечу!
+Просто отправьте название трека или исполнителя, и я найду музыку!
+
+Примеры:
+• Imagine Dragons
+• Believer
+• Metallica - Nothing Else Matters
     """
     await update.message.reply_text(help_text)
 
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text
-    await update.message.reply_text(f'Вы написали: {user_message}')
+async def search_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global yandex_client
+    
+    if not yandex_client:
+        await update.message.reply_text(
+            '❌ Яндекс.Музыка не настроена.\n'
+            'Администратор должен добавить YANDEX_MUSIC_TOKEN в переменные окружения.'
+        )
+        return
+    
+    query = ' '.join(context.args) if context.args else None
+    
+    if not query:
+        await update.message.reply_text(
+            'Пожалуйста, укажите что искать:\n'
+            '/search Название трека или исполнителя'
+        )
+        return
+    
+    try:
+        await update.message.reply_text(f'🔍 Ищу: {query}...')
+        
+        search_result = yandex_client.search(query, type_='track')
+        
+        if not search_result or not search_result.tracks:
+            await update.message.reply_text('❌ Ничего не найдено. Попробуйте другой запрос.')
+            return
+        
+        tracks = search_result.tracks.results[:5]
+        
+        response = f'🎵 Найдено треков: {len(tracks)}\n\n'
+        
+        for i, track in enumerate(tracks, 1):
+            artists = ', '.join([artist.name for artist in track.artists])
+            duration_seconds = track.duration_ms // 1000 if track.duration_ms else 0
+            minutes = duration_seconds // 60
+            seconds = duration_seconds % 60
+            
+            response += f'{i}. {artists} - {track.title}\n'
+            response += f'   ⏱ {minutes}:{seconds:02d}\n'
+            
+            if track.albums and len(track.albums) > 0:
+                response += f'   💿 {track.albums[0].title}\n'
+            
+            response += '\n'
+        
+        await update.message.reply_text(response)
+        
+    except Exception as e:
+        logger.error(f'Ошибка поиска: {e}')
+        await update.message.reply_text(f'❌ Ошибка при поиске: {str(e)}')
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global yandex_client
+    
+    if not yandex_client:
+        await update.message.reply_text(
+            '❌ Яндекс.Музыка не настроена.\n'
+            'Используйте /help для информации о доступных командах.'
+        )
+        return
+    
+    query = update.message.text
+    
+    try:
+        await update.message.reply_text(f'🔍 Ищу: {query}...')
+        
+        search_result = yandex_client.search(query, type_='track')
+        
+        if not search_result or not search_result.tracks:
+            await update.message.reply_text('❌ Ничего не найдено. Попробуйте другой запрос.')
+            return
+        
+        tracks = search_result.tracks.results[:3]
+        
+        response = f'🎵 Найдено:\n\n'
+        
+        for i, track in enumerate(tracks, 1):
+            artists = ', '.join([artist.name for artist in track.artists])
+            duration_seconds = track.duration_ms // 1000 if track.duration_ms else 0
+            minutes = duration_seconds // 60
+            seconds = duration_seconds % 60
+            
+            response += f'{i}. {artists} - {track.title}\n'
+            response += f'   ⏱ {minutes}:{seconds:02d}\n\n'
+        
+        await update.message.reply_text(response)
+        
+    except Exception as e:
+        logger.error(f'Ошибка поиска: {e}')
+        await update.message.reply_text(f'❌ Ошибка при поиске: {str(e)}')
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f'Update {update} caused error {context.error}')
 
 def main():
+    global yandex_client
+    
     token = os.getenv('TELEGRAM_BOT_TOKEN')
     
     if not token:
@@ -41,16 +142,31 @@ def main():
         print('Пожалуйста, добавьте токен бота в переменные окружения.')
         return
     
+    yandex_token = os.getenv('YANDEX_MUSIC_TOKEN')
+    
+    if yandex_token:
+        try:
+            yandex_client = Client(yandex_token).init()
+            logger.info('Яндекс.Музыка подключена успешно!')
+            print('✅ Яндекс.Музыка подключена!')
+        except Exception as e:
+            logger.error(f'Ошибка подключения к Яндекс.Музыке: {e}')
+            print(f'⚠️ Не удалось подключиться к Яндекс.Музыке: {e}')
+    else:
+        logger.warning('YANDEX_MUSIC_TOKEN not found - music search disabled')
+        print('⚠️ YANDEX_MUSIC_TOKEN не найден - поиск музыки отключен')
+    
     application = Application.builder().token(token).build()
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    application.add_handler(CommandHandler("search", search_music))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
     application.add_error_handler(error_handler)
     
     logger.info('Бот запущен!')
-    print('Бот успешно запущен и готов к работе!')
+    print('🤖 Бот успешно запущен и готов к работе!')
     
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
