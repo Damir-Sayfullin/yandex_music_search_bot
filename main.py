@@ -289,6 +289,86 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f'Update {update} caused error {context.error}')
 
+def get_user_id_by_username(username):
+    """Get user_id by username (with or without @)"""
+    try:
+        if username.startswith('@'):
+            username = username[1:]
+        
+        conn = get_db_connection()
+        if not conn:
+            return None
+        cur = conn.cursor()
+        
+        cur.execute("SELECT user_id FROM users WHERE username = %s", (username,))
+        result = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        return result[0] if result else None
+    except Exception as e:
+        logger.error(f'Error getting user_id by username: {e}')
+        return None
+
+def is_admin(user_id):
+    """Check if user is admin (from DB or env var)"""
+    main_admin_id = os.getenv('ADMIN_USER_ID')
+    if main_admin_id and int(main_admin_id) == user_id:
+        return True
+    
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return False
+        cur = conn.cursor()
+        
+        cur.execute("SELECT user_id FROM admins WHERE user_id = %s", (user_id,))
+        result = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        return result is not None
+    except Exception as e:
+        logger.error(f'Error checking admin status: {e}')
+        return False
+
+def add_admin_to_db(target_user_id, added_by_user_id):
+    """Add user to admins table"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return False
+        cur = conn.cursor()
+        
+        cur.execute(
+            "INSERT INTO admins (user_id, added_by) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (target_user_id, added_by_user_id)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f'Error adding admin: {e}')
+        return False
+
+def remove_admin_from_db(target_user_id):
+    """Remove user from admins table"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return False
+        cur = conn.cursor()
+        
+        cur.execute("DELETE FROM admins WHERE user_id = %s", (target_user_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f'Error removing admin: {e}')
+        return False
+
 def get_user_actions(user_id, limit=50):
     """Get user actions with timestamps"""
     try:
@@ -450,23 +530,29 @@ def get_admin_stats():
         return None
 
 async def user_actions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admin_id = os.getenv('ADMIN_USER_ID')
     user_id = update.message.from_user.id
     
-    if not admin_id or int(admin_id) != user_id:
+    if not is_admin(user_id):
         await update.message.reply_text('❌ У вас нет доступа к этой команде.')
         logger.warning(f'Unauthorized user_actions access attempt by user {user_id}')
         return
     
     if not context.args:
-        await update.message.reply_text('Использование: /user_actions <user_id>')
+        await update.message.reply_text('Использование: /user_actions <user_id или @username>')
         return
     
+    arg = context.args[0]
+    target_user_id = None
+    
+    # Try to parse as user_id first
     try:
-        target_user_id = int(context.args[0])
+        target_user_id = int(arg)
     except ValueError:
-        await update.message.reply_text('❌ user_id должен быть числом.')
-        return
+        # Try to parse as username
+        target_user_id = get_user_id_by_username(arg)
+        if not target_user_id:
+            await update.message.reply_text('❌ Пользователь не найден.')
+            return
     
     user_actions = get_user_actions(target_user_id, limit=30)
     if not user_actions:
@@ -499,11 +585,74 @@ async def user_actions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response)
     logger.info(f'User actions for {target_user_id} requested by admin {user_id}')
 
-async def bot_uptime(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admin_id = os.getenv('ADMIN_USER_ID')
+async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     
-    if not admin_id or int(admin_id) != user_id:
+    if not is_admin(user_id):
+        await update.message.reply_text('❌ У вас нет доступа к этой команде.')
+        logger.warning(f'Unauthorized add_admin access attempt by user {user_id}')
+        return
+    
+    if not context.args:
+        await update.message.reply_text('Использование: /add_admin <user_id или @username>')
+        return
+    
+    arg = context.args[0]
+    target_user_id = None
+    
+    try:
+        target_user_id = int(arg)
+    except ValueError:
+        target_user_id = get_user_id_by_username(arg)
+        if not target_user_id:
+            await update.message.reply_text('❌ Пользователь не найден.')
+            return
+    
+    if add_admin_to_db(target_user_id, user_id):
+        await update.message.reply_text(f'✅ Пользователь {target_user_id} добавлен в админы.')
+        logger.info(f'User {target_user_id} added to admins by {user_id}')
+    else:
+        await update.message.reply_text('❌ Ошибка при добавлении админа.')
+
+async def remove_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    main_admin_id = os.getenv('ADMIN_USER_ID')
+    
+    if not is_admin(user_id):
+        await update.message.reply_text('❌ У вас нет доступа к этой команде.')
+        logger.warning(f'Unauthorized remove_admin access attempt by user {user_id}')
+        return
+    
+    if not context.args:
+        await update.message.reply_text('Использование: /remove_admin <user_id или @username>')
+        return
+    
+    arg = context.args[0]
+    target_user_id = None
+    
+    try:
+        target_user_id = int(arg)
+    except ValueError:
+        target_user_id = get_user_id_by_username(arg)
+        if not target_user_id:
+            await update.message.reply_text('❌ Пользователь не найден.')
+            return
+    
+    # Prevent removing main admin
+    if main_admin_id and int(main_admin_id) == target_user_id:
+        await update.message.reply_text('❌ Нельзя удалить главного администратора!')
+        return
+    
+    if remove_admin_from_db(target_user_id):
+        await update.message.reply_text(f'✅ Пользователь {target_user_id} удален из админов.')
+        logger.info(f'User {target_user_id} removed from admins by {user_id}')
+    else:
+        await update.message.reply_text('❌ Ошибка при удалении админа.')
+
+async def bot_uptime(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    
+    if not is_admin(user_id):
         await update.message.reply_text('❌ У вас нет доступа к этой команде.')
         logger.warning(f'Unauthorized bot_uptime access attempt by user {user_id}')
         return
@@ -530,10 +679,9 @@ async def bot_uptime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f'Bot uptime requested by user {user_id}')
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admin_id = os.getenv('ADMIN_USER_ID')
     user_id = update.message.from_user.id
     
-    if not admin_id or int(admin_id) != user_id:
+    if not is_admin(user_id):
         await update.message.reply_text('❌ У вас нет доступа к этой команде.')
         logger.warning(f'Unauthorized admin access attempt by user {user_id}')
         return
@@ -778,6 +926,8 @@ def main():
     application.add_handler(CommandHandler("admin_stats", admin_stats))
     application.add_handler(CommandHandler("bot_uptime", bot_uptime))
     application.add_handler(CommandHandler("user_actions", user_actions_cmd))
+    application.add_handler(CommandHandler("add_admin", add_admin_cmd))
+    application.add_handler(CommandHandler("remove_admin", remove_admin_cmd))
     application.add_handler(CommandHandler("my_stats", my_stats))
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
