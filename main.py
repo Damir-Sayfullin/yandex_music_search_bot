@@ -778,12 +778,9 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = '📊 ОБЩАЯ СТАТИСТИКА БОТА\n\n'
     response += '📈 Ключевые метрики:\n'
     response += f'👥 Всего пользователей: {stats["total_users"]}\n'
-    response += f'🟢 Активных пользователей (5+ поисков): {stats["active_users"]}\n'
     response += f'🔍 Всего поисков: {stats["total_searches"]}\n'
-    response += f'🔄 Уникальных запросов: {stats["unique_searches"]}\n'
+    # Всего взаимодействий
     response += f'📊 Средне поисков/пользователя: {stats["avg_searches_per_user"]}\n'
-    response += f'🎵 Всего просмотров треков: {stats["total_track_views"]}\n'
-    response += f'👁 Средне просмотров/поиск: {stats["avg_views_per_search"]}\n'
     response += '\n' + '='*50 + '\n\n'
     
     response += '🏆 ТОП 10 АКТИВНЫХ ПОЛЬЗОВАТЕЛЕЙ:\n'
@@ -923,7 +920,6 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f'💬 Всего взаимодействий: {total_uses}\n'
         response += f'🔍 Всего поисков: {total_searches}\n'
         response += f'🎵 Просмотров треков: {total_track_views}\n'
-        response += f'📊 Поисков за сеанс: {avg_per_session}\n\n'
         
         if my_queries:
             response += f'🔥 ВАШ ТОП ЗАПРОСОВ:\n'
