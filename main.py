@@ -97,6 +97,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 /start - Приветственное сообщение
 /search <название> - Поиск трека
+/my_stats - Ваша личная статистика
 /help - Показать это сообщение
 
 Просто отправьте название трека или исполнителя, и я найду музыку!
@@ -224,6 +225,153 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f'Ошибка поиска: {e}')
         await update.message.reply_text(f'❌ Ошибка при поиске: {str(e)}')
 
+def get_admin_stats():
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return None
+        cur = conn.cursor()
+        
+        stats = {}
+        
+        cur.execute('SELECT COUNT(*) FROM users')
+        stats['total_users'] = cur.fetchone()[0]
+        
+        cur.execute('SELECT SUM(total_searches) FROM users')
+        stats['total_searches'] = cur.fetchone()[0] or 0
+        
+        cur.execute('SELECT COUNT(*) FROM track_views')
+        stats['total_track_views'] = cur.fetchone()[0]
+        
+        cur.execute("""
+            SELECT user_id, username, first_name, total_uses, total_searches 
+            FROM users 
+            ORDER BY total_uses DESC 
+            LIMIT 10
+        """)
+        stats['top_users'] = cur.fetchall()
+        
+        cur.execute("""
+            SELECT query, COUNT(*) as count 
+            FROM searches 
+            GROUP BY query 
+            ORDER BY count DESC 
+            LIMIT 10
+        """)
+        stats['popular_queries'] = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        return stats
+    except Exception as e:
+        logger.error(f'Error getting admin stats: {e}')
+        return None
+
+async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin_id = os.getenv('ADMIN_USER_ID')
+    user_id = update.message.from_user.id
+    
+    if not admin_id or int(admin_id) != user_id:
+        await update.message.reply_text('❌ У вас нет доступа к этой команде.')
+        logger.warning(f'Unauthorized admin access attempt by user {user_id}')
+        return
+    
+    stats = get_admin_stats()
+    if not stats:
+        await update.message.reply_text('❌ Ошибка при получении статистики.')
+        return
+    
+    response = '📊 Общая статистика бота:\n\n'
+    response += f'👥 Всего пользователей: {stats["total_users"]}\n'
+    response += f'🔍 Всего поисков: {stats["total_searches"]}\n'
+    response += f'🎵 Всего просмотров треков: {stats["total_track_views"]}\n'
+    response += '\n' + '='*40 + '\n\n'
+    
+    response += '🏆 Топ 10 активных пользователей:\n'
+    for i, (uid, username, first_name, uses, searches) in enumerate(stats['top_users'], 1):
+        username_str = f'@{username}' if username else f'{first_name}'
+        response += f'{i}. {username_str} - использований: {uses}, поисков: {searches}\n'
+    
+    response += '\n' + '='*40 + '\n\n'
+    response += '🔥 Топ 10 популярных запросов:\n'
+    for i, (query, count) in enumerate(stats['popular_queries'], 1):
+        response += f'{i}. "{query}" - {count} поиск(ов)\n'
+    
+    await update.message.reply_text(response)
+    logger.info(f'Admin stats requested by user {user_id}')
+
+async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    user_id = user.id
+    
+    try:
+        conn = get_db_connection()
+        if not conn:
+            await update.message.reply_text('❌ Ошибка подключения к базе данных.')
+            return
+        
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT username, first_name, total_uses, total_searches 
+            FROM users 
+            WHERE user_id = %s
+        """, (user_id,))
+        result = cur.fetchone()
+        
+        if not result:
+            await update.message.reply_text('❌ Ваши данные не найдены.')
+            cur.close()
+            conn.close()
+            return
+        
+        username, first_name, total_uses, total_searches = result
+        
+        cur.execute("""
+            SELECT track_title, track_artists, created_at 
+            FROM track_views 
+            WHERE user_id = %s 
+            ORDER BY created_at DESC 
+            LIMIT 10
+        """, (user_id,))
+        recent_tracks = cur.fetchall()
+        
+        cur.execute("""
+            SELECT query, COUNT(*) as count 
+            FROM searches 
+            WHERE user_id = %s 
+            GROUP BY query 
+            ORDER BY count DESC 
+            LIMIT 5
+        """, (user_id,))
+        my_queries = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        response = f'📈 Ваша статистика:\n\n'
+        response += f'👤 Имя: {first_name}\n'
+        if username:
+            response += f'📱 Юзернейм: @{username}\n'
+        response += f'🔍 Всего поисков: {total_searches}\n'
+        response += f'💬 Использований бота: {total_uses}\n'
+        
+        if my_queries:
+            response += f'\n🔥 Ваши популярные запросы:\n'
+            for query, count in my_queries:
+                response += f'• "{query}" - {count} раз\n'
+        
+        if recent_tracks:
+            response += f'\n🎵 Последние просмотренные треки:\n'
+            for track, artists, created_at in recent_tracks[:5]:
+                response += f'• {artists} - {track}\n'
+        
+        await update.message.reply_text(response)
+        
+    except Exception as e:
+        logger.error(f'Error getting user stats: {e}')
+        await update.message.reply_text('❌ Ошибка при получении статистики.')
+
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f'Update {update} caused error {context.error}')
 
@@ -301,6 +449,8 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("search", search_music))
+    application.add_handler(CommandHandler("admin_stats", admin_stats))
+    application.add_handler(CommandHandler("my_stats", my_stats))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
     application.add_error_handler(error_handler)

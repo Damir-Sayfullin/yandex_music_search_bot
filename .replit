@@ -31,3 +31,8 @@ outputType = "console"
 [[ports]]
 localPort = 8080
 externalPort = 80
+
+[userenv]
+
+[userenv.shared]
+ADMIN_USER_ID = "933698505"
