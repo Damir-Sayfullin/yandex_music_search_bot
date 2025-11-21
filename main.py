@@ -494,6 +494,9 @@ def get_admin_stats():
         cur.execute('SELECT SUM(total_searches) FROM users')
         stats['total_searches'] = cur.fetchone()[0] or 0
         
+        cur.execute('SELECT SUM(total_uses) FROM users')
+        stats['total_uses'] = cur.fetchone()[0] or 0
+        
         cur.execute('SELECT COUNT(*) FROM track_views')
         stats['total_track_views'] = cur.fetchone()[0]
         
@@ -779,7 +782,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response += '📈 Ключевые метрики:\n'
     response += f'👥 Всего пользователей: {stats["total_users"]}\n'
     response += f'🔍 Всего поисков: {stats["total_searches"]}\n'
-    # Всего взаимодействий
+    response += f'💬 Всего взаимодействий: {stats["total_uses"]}\n'
     response += f'📊 Средне поисков/пользователя: {stats["avg_searches_per_user"]}\n'
     response += '\n' + '='*50 + '\n\n'
     
