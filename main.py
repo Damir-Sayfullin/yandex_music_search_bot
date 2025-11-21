@@ -92,9 +92,11 @@ def log_bot_startup():
         if not conn:
             return
         cur = conn.cursor()
-        # Use MSK timezone for recording
-        msk_time = datetime.now(MSK)
-        cur.execute('INSERT INTO bot_sessions (started_at) VALUES (%s)', (msk_time,))
+        # Record current time in MSK timezone
+        cur.execute("""
+            INSERT INTO bot_sessions (started_at) 
+            VALUES (NOW() AT TIME ZONE 'Europe/Moscow')
+        """)
         conn.commit()
         cur.close()
         conn.close()
@@ -292,8 +294,12 @@ def get_admin_stats():
         cur.execute('SELECT COUNT(*) FROM users WHERE total_searches >= 5')
         stats['active_users'] = cur.fetchone()[0]
         
-        # Get last bot session
-        cur.execute('SELECT started_at FROM bot_sessions ORDER BY started_at DESC LIMIT 1')
+        # Get last bot session (convert to MSK for display)
+        cur.execute("""
+            SELECT started_at AT TIME ZONE 'Europe/Moscow' 
+            FROM bot_sessions 
+            ORDER BY started_at DESC LIMIT 1
+        """)
         session_result = cur.fetchone()
         if session_result:
             stats['last_restart'] = session_result[0]
@@ -353,21 +359,27 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Bot session info
     if stats['last_restart']:
         restart_time = stats['last_restart']
-        # Convert to MSK if needed
-        if restart_time.tzinfo is None:
-            restart_time = pytz.utc.localize(restart_time).astimezone(MSK)
+        # Handle timezone-aware datetime from database
+        if restart_time.tzinfo is not None:
+            restart_time_display = restart_time
         else:
-            restart_time = restart_time.astimezone(MSK)
+            restart_time_display = pytz.utc.localize(restart_time).astimezone(MSK)
         
-        # Calculate uptime
+        # Calculate uptime (use timezone-aware now)
         now_msk = datetime.now(MSK)
-        uptime = now_msk - restart_time
+        # If restart_time is naive, localize it to UTC first, then convert to MSK
+        if restart_time.tzinfo is None:
+            restart_time_aware = pytz.utc.localize(restart_time).astimezone(MSK)
+        else:
+            restart_time_aware = restart_time.astimezone(MSK) if restart_time.tzinfo else restart_time
+        
+        uptime = now_msk - restart_time_aware
         hours = uptime.seconds // 3600
         minutes = (uptime.seconds % 3600) // 60
         days = uptime.days
         
         response += '⏱ ВРЕМЯ РАБОТЫ (МСК):\n'
-        response += f'🔄 Последний запуск: {restart_time.strftime("%d.%m.%Y %H:%M:%S")}\n'
+        response += f'🔄 Последний запуск: {restart_time_display.strftime("%d.%m.%Y %H:%M:%S")}\n'
         response += f'⌛ Время работы: {days}д {hours}ч {minutes}м\n\n'
     
     response += '📈 Ключевые метрики:\n'
