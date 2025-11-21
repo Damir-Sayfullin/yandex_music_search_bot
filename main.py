@@ -1,6 +1,8 @@
 import os
 import logging
 import threading
+import time
+import requests
 from aiohttp import web
 import asyncio
 from telegram import Update
@@ -166,6 +168,24 @@ def run_webserver():
     loop.run_until_complete(start_webserver())
     loop.run_forever()
 
+def self_ping():
+    logger.info('Self-ping thread started')
+    print('🔄 Самопинг включен - бот будет пинговать себя каждые 5 минут')
+    
+    time.sleep(10)
+    
+    while True:
+        try:
+            response = requests.get('http://localhost:8080/health', timeout=10)
+            if response.status_code == 200:
+                logger.info('Self-ping successful')
+            else:
+                logger.warning(f'Self-ping returned status {response.status_code}')
+        except Exception as e:
+            logger.error(f'Self-ping failed: {e}')
+        
+        time.sleep(300)
+
 def main():
     global yandex_client
     
@@ -193,6 +213,9 @@ def main():
     
     webserver_thread = threading.Thread(target=run_webserver, daemon=True)
     webserver_thread.start()
+    
+    ping_thread = threading.Thread(target=self_ping, daemon=True)
+    ping_thread.start()
     
     application = Application.builder().token(token).build()
     
