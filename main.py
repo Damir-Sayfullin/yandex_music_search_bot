@@ -20,43 +20,6 @@ logger = logging.getLogger(__name__)
 
 yandex_client = None
 db_connection = None
-zvuk_api_key = None
-vk_token = None
-
-def search_vk(query):
-    """Search music in VKontakte"""
-    if not vk_token:
-        logger.warning('VK token not set')
-        return None
-    try:
-        url = 'https://api.vk.com/method/audio.search'
-        params = {
-            'q': query,
-            'count': 10,
-            'access_token': vk_token,
-            'v': '5.131'
-        }
-        response = requests.get(url, params=params, timeout=10)
-        data = response.json()
-        logger.info(f'VK API response: {data}')
-        
-        if 'error' in data:
-            logger.error(f'VK API error: {data["error"]}')
-            return None
-        
-        if 'response' in data:
-            items = data['response'].get('items', []) if isinstance(data['response'], dict) else []
-            logger.info(f'VK found {len(items)} tracks')
-            return items if items else None
-        
-        return None
-    except Exception as e:
-        logger.error(f'VK search error: {e}')
-        return None
-
-def search_zvuk(query):
-    """Search music in Zvuk (Sber) - temporarily disabled"""
-    return None
 
 def get_db_connection():
     try:
@@ -134,7 +97,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎵 Доступные команды:
 
 /start - Приветственное сообщение
-/search <название> - Поиск в Яндекс.Музыке и ВКонтакте (10 результатов)
+/search <название> - Поиск в Яндекс.Музыке (10 результатов)
 /my_stats - Ваша личная статистика
 /help - Показать это сообщение
 
@@ -163,67 +126,39 @@ async def search_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
+        if not yandex_client:
+            await update.message.reply_text('❌ Яндекс.Музыка не настроена.')
+            return
+        
         await update.message.reply_text(f'🔍 Ищу: {query}...')
         
-        all_tracks = []
-        sources = []
+        search_result = yandex_client.search(query, type_='track')
         
-        if yandex_client:
-            try:
-                search_result = yandex_client.search(query, type_='track')
-                if search_result and search_result.tracks:
-                    yandex_tracks = search_result.tracks.results[:10]
-                    for t in yandex_tracks:
-                        all_tracks.append(('yandex', t))
-                    sources.append('🎵 Яндекс.Музыка')
-            except Exception as e:
-                logger.error(f'Yandex search error: {e}')
-        
-        vk_tracks = search_vk(query)
-        if vk_tracks:
-            for t in vk_tracks[:10]:
-                all_tracks.append(('vk', t))
-            sources.append('🎵 ВКонтакте')
-        
-        if not all_tracks:
+        if not search_result or not search_result.tracks:
             await update.message.reply_text('❌ Ничего не найдено. Попробуйте другой запрос.')
             return
         
-        all_tracks = all_tracks[:10]
-        log_search(user.id, query, len(all_tracks))
+        tracks = search_result.tracks.results[:10]
+        log_search(user.id, query, len(tracks))
         
-        sources_text = ' и '.join(sources) if sources else ''
-        response = f'🎵 Найдено в {sources_text}: {len(all_tracks)} треков\n\n'
+        response = f'🎵 Найдено: {len(tracks)} треков\n\n'
         
-        for i, (source, track) in enumerate(all_tracks, 1):
-            if source == 'yandex':
-                artists = ', '.join([artist.name for artist in track.artists])
-                duration_seconds = track.duration_ms // 1000 if track.duration_ms else 0
-                minutes = duration_seconds // 60
-                seconds = duration_seconds % 60
-                
-                log_track_view(user.id, track.title, artists, query)
-                
-                response += f'{i}. {artists} - {track.title}\n'
-                response += f'   ⏱ {minutes}:{seconds:02d} 🎵 Яндекс\n'
-                
-                if track.albums and len(track.albums) > 0:
-                    album_id = track.albums[0].id
-                    track_id = track.id
-                    track_url = f'https://music.yandex.ru/album/{album_id}/track/{track_id}'
-                    response += f'   🔗 {track_url}\n'
-            else:
-                artist = track.get('artist', 'Unknown')
-                title = track.get('title', 'Unknown')
-                duration = track.get('duration', 0)
-                
-                log_track_view(user.id, title, artist, query)
-                
-                minutes = duration // 60
-                seconds = duration % 60
-                
-                response += f'{i}. {artist} - {title}\n'
-                response += f'   ⏱ {minutes}:{seconds:02d} 🎵 ВКонтакте\n'
+        for i, track in enumerate(tracks, 1):
+            artists = ', '.join([artist.name for artist in track.artists])
+            duration_seconds = track.duration_ms // 1000 if track.duration_ms else 0
+            minutes = duration_seconds // 60
+            seconds = duration_seconds % 60
+            
+            log_track_view(user.id, track.title, artists, query)
+            
+            response += f'{i}. {artists} - {track.title}\n'
+            response += f'   ⏱ {minutes}:{seconds:02d}\n'
+            
+            if track.albums and len(track.albums) > 0:
+                album_id = track.albums[0].id
+                track_id = track.id
+                track_url = f'https://music.yandex.ru/album/{album_id}/track/{track_id}'
+                response += f'   🔗 {track_url}\n'
             
             response += '\n'
         
@@ -239,70 +174,42 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     log_user(user.id, user.username, user.first_name, user.last_name)
     
+    if not yandex_client:
+        await update.message.reply_text('❌ Яндекс.Музыка не настроена.')
+        return
+    
     query = update.message.text
     
     try:
         await update.message.reply_text(f'🔍 Ищу: {query}...')
         
-        all_tracks = []
-        sources = []
+        search_result = yandex_client.search(query, type_='track')
         
-        if yandex_client:
-            try:
-                search_result = yandex_client.search(query, type_='track')
-                if search_result and search_result.tracks:
-                    yandex_tracks = search_result.tracks.results[:10]
-                    for t in yandex_tracks:
-                        all_tracks.append(('yandex', t))
-                    sources.append('🎵 Яндекс.Музыка')
-            except Exception as e:
-                logger.error(f'Yandex search error: {e}')
-        
-        vk_tracks = search_vk(query)
-        if vk_tracks:
-            for t in vk_tracks[:10]:
-                all_tracks.append(('vk', t))
-            sources.append('🎵 ВКонтакте')
-        
-        if not all_tracks:
+        if not search_result or not search_result.tracks:
             await update.message.reply_text('❌ Ничего не найдено. Попробуйте другой запрос.')
             return
         
-        all_tracks = all_tracks[:10]
-        log_search(user.id, query, len(all_tracks))
+        tracks = search_result.tracks.results[:10]
+        log_search(user.id, query, len(tracks))
         
-        sources_text = ' и '.join(sources) if sources else ''
-        response = f'🎵 Найдено в {sources_text}:\n\n'
+        response = f'🎵 Найдено: {len(tracks)} треков\n\n'
         
-        for i, (source, track) in enumerate(all_tracks, 1):
-            if source == 'yandex':
-                artists = ', '.join([artist.name for artist in track.artists])
-                duration_seconds = track.duration_ms // 1000 if track.duration_ms else 0
-                minutes = duration_seconds // 60
-                seconds = duration_seconds % 60
-                
-                log_track_view(user.id, track.title, artists, query)
-                
-                response += f'{i}. {artists} - {track.title}\n'
-                response += f'   ⏱ {minutes}:{seconds:02d} 🎵 Яндекс\n'
-                
-                if track.albums and len(track.albums) > 0:
-                    album_id = track.albums[0].id
-                    track_id = track.id
-                    track_url = f'https://music.yandex.ru/album/{album_id}/track/{track_id}'
-                    response += f'   🔗 {track_url}\n'
-            else:
-                artist = track.get('artist', 'Unknown')
-                title = track.get('title', 'Unknown')
-                duration = track.get('duration', 0)
-                
-                log_track_view(user.id, title, artist, query)
-                
-                minutes = duration // 60
-                seconds = duration % 60
-                
-                response += f'{i}. {artist} - {title}\n'
-                response += f'   ⏱ {minutes}:{seconds:02d} 🎵 ВКонтакте\n'
+        for i, track in enumerate(tracks, 1):
+            artists = ', '.join([artist.name for artist in track.artists])
+            duration_seconds = track.duration_ms // 1000 if track.duration_ms else 0
+            minutes = duration_seconds // 60
+            seconds = duration_seconds % 60
+            
+            log_track_view(user.id, track.title, artists, query)
+            
+            response += f'{i}. {artists} - {track.title}\n'
+            response += f'   ⏱ {minutes}:{seconds:02d}\n'
+            
+            if track.albums and len(track.albums) > 0:
+                album_id = track.albums[0].id
+                track_id = track.id
+                track_url = f'https://music.yandex.ru/album/{album_id}/track/{track_id}'
+                response += f'   🔗 {track_url}\n'
             
             response += '\n'
         
@@ -517,10 +424,7 @@ def self_ping():
         time.sleep(300)
 
 def main():
-    global yandex_client, zvuk_api_key, vk_token
-    
-    zvuk_api_key = os.getenv('ZVUK_API_KEY')
-    vk_token = os.getenv('VK_ACCESS_TOKEN')
+    global yandex_client
     
     token = os.getenv('TELEGRAM_BOT_TOKEN')
     
@@ -543,20 +447,6 @@ def main():
     else:
         logger.warning('YANDEX_MUSIC_TOKEN not found')
         print('⚠️ YANDEX_MUSIC_TOKEN не найден')
-    
-    if zvuk_api_key:
-        logger.info('Звук API ключ загружен!')
-        print('✅ Звук от Сбера подключен!')
-    else:
-        logger.warning('ZVUK_API_KEY not found')
-        print('⚠️ ZVUK_API_KEY не найден')
-    
-    if vk_token:
-        logger.info('ВКонтакте API ключ загружен!')
-        print('✅ ВКонтакте Music подключено!')
-    else:
-        logger.warning('VK_ACCESS_TOKEN not found')
-        print('⚠️ VK_ACCESS_TOKEN не найден')
     
     webserver_thread = threading.Thread(target=run_webserver, daemon=True)
     webserver_thread.start()
