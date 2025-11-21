@@ -96,9 +96,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎵 Доступные команды:
 
 /start - Приветственное сообщение
-/search <название> - Поиск трека
-/recommend - 10 рекомендуемых популярных треков
-/top10 - Топ 10 самых просматриваемых треков
+/search <название> - Поиск трека (10 результатов)
 /my_stats - Ваша личная статистика
 /help - Показать это сообщение
 
@@ -142,7 +140,7 @@ async def search_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text('❌ Ничего не найдено. Попробуйте другой запрос.')
             return
         
-        tracks = search_result.tracks.results[:5]
+        tracks = search_result.tracks.results[:10]
         log_search(user.id, query, len(tracks))
         
         response = f'🎵 Найдено треков: {len(tracks)}\n\n'
@@ -197,7 +195,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text('❌ Ничего не найдено. Попробуйте другой запрос.')
             return
         
-        tracks = search_result.tracks.results[:3]
+        tracks = search_result.tracks.results[:10]
         log_search(user.id, query, len(tracks))
         
         response = f'🎵 Найдено:\n\n'
@@ -226,6 +224,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f'Ошибка поиска: {e}')
         await update.message.reply_text(f'❌ Ошибка при поиске: {str(e)}')
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f'Update {update} caused error {context.error}')
 
 def get_admin_stats():
     try:
@@ -302,91 +303,6 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response)
     logger.info(f'Admin stats requested by user {user_id}')
 
-async def top_tracks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        conn = get_db_connection()
-        if not conn:
-            await update.message.reply_text('❌ Ошибка подключения к базе данных.')
-            return
-        
-        cur = conn.cursor()
-        
-        cur.execute("""
-            SELECT track_title, track_artists, COUNT(*) as views 
-            FROM track_views 
-            GROUP BY track_title, track_artists 
-            ORDER BY views DESC 
-            LIMIT 10
-        """)
-        tracks = cur.fetchall()
-        cur.close()
-        conn.close()
-        
-        if not tracks:
-            await update.message.reply_text('❌ Пока нет просмотренных треков.')
-            return
-        
-        response = '🏆 Топ 10 самых популярных треков:\n\n'
-        for i, (title, artists, views) in enumerate(tracks, 1):
-            response += f'{i}. {artists} - {title}\n   👁 {views} просмотр(ов)\n'
-        
-        await update.message.reply_text(response)
-        
-    except Exception as e:
-        logger.error(f'Error getting top tracks: {e}')
-        await update.message.reply_text('❌ Ошибка при получении топа.')
-
-async def recommend(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global yandex_client
-    
-    user = update.message.from_user
-    log_user(user.id, user.username, user.first_name, user.last_name)
-    
-    if not yandex_client:
-        await update.message.reply_text(
-            '❌ Яндекс.Музыка не настроена.\n'
-            'Администратор должен добавить YANDEX_MUSIC_TOKEN в переменные окружения.'
-        )
-        return
-    
-    try:
-        await update.message.reply_text('🎵 Ищу рекомендации...')
-        
-        search_result = yandex_client.search('best', type_='track')
-        
-        if not search_result or not search_result.tracks:
-            await update.message.reply_text('❌ Не удалось получить рекомендации.')
-            return
-        
-        tracks = search_result.tracks.results[:10]
-        
-        response = f'🎵 Рекомендуем 10 популярных треков:\n\n'
-        
-        for i, track in enumerate(tracks, 1):
-            artists = ', '.join([artist.name for artist in track.artists])
-            duration_seconds = track.duration_ms // 1000 if track.duration_ms else 0
-            minutes = duration_seconds // 60
-            seconds = duration_seconds % 60
-            
-            log_track_view(user.id, track.title, artists, 'recommend')
-            
-            response += f'{i}. {artists} - {track.title}\n'
-            response += f'   ⏱ {minutes}:{seconds:02d}\n'
-            
-            if track.albums and len(track.albums) > 0:
-                album_id = track.albums[0].id
-                track_id = track.id
-                track_url = f'https://music.yandex.ru/album/{album_id}/track/{track_id}'
-                response += f'   🔗 {track_url}\n'
-            
-            response += '\n'
-        
-        await update.message.reply_text(response)
-        
-    except Exception as e:
-        logger.error(f'Error getting recommendations: {e}')
-        await update.message.reply_text(f'❌ Ошибка при поиске рекомендаций: {str(e)}')
-
 async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     user_id = user.id
@@ -458,9 +374,6 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f'Error getting user stats: {e}')
         await update.message.reply_text('❌ Ошибка при получении статистики.')
-
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f'Update {update} caused error {context.error}')
 
 async def health_check(request):
     return web.Response(text='Bot is alive!')
@@ -536,8 +449,6 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("search", search_music))
-    application.add_handler(CommandHandler("recommend", recommend))
-    application.add_handler(CommandHandler("top10", top_tracks))
     application.add_handler(CommandHandler("admin_stats", admin_stats))
     application.add_handler(CommandHandler("my_stats", my_stats))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
