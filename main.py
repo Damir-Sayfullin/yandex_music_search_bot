@@ -256,6 +256,22 @@ def get_admin_stats():
         cur.execute('SELECT COUNT(*) FROM track_views')
         stats['total_track_views'] = cur.fetchone()[0]
         
+        cur.execute('SELECT COUNT(DISTINCT query) FROM searches')
+        stats['unique_searches'] = cur.fetchone()[0]
+        
+        if stats['total_users'] > 0:
+            stats['avg_searches_per_user'] = round(stats['total_searches'] / stats['total_users'], 2)
+        else:
+            stats['avg_searches_per_user'] = 0
+        
+        if stats['total_searches'] > 0:
+            stats['avg_views_per_search'] = round(stats['total_track_views'] / stats['total_searches'], 2)
+        else:
+            stats['avg_views_per_search'] = 0
+        
+        cur.execute('SELECT COUNT(*) FROM users WHERE total_searches >= 5')
+        stats['active_users'] = cur.fetchone()[0]
+        
         cur.execute("""
             SELECT user_id, username, first_name, total_uses, total_searches 
             FROM users 
@@ -272,6 +288,16 @@ def get_admin_stats():
             LIMIT 10
         """)
         stats['popular_queries'] = cur.fetchall()
+        
+        cur.execute("""
+            SELECT track_artists, COUNT(*) as count 
+            FROM track_views 
+            WHERE track_artists IS NOT NULL AND track_artists != ''
+            GROUP BY track_artists 
+            ORDER BY count DESC 
+            LIMIT 5
+        """)
+        stats['popular_artists'] = cur.fetchall()
         
         cur.close()
         conn.close()
@@ -294,21 +320,33 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('❌ Ошибка при получении статистики.')
         return
     
-    response = '📊 Общая статистика бота:\n\n'
+    response = '📊 ОБЩАЯ СТАТИСТИКА БОТА\n\n'
+    response += '📈 Ключевые метрики:\n'
     response += f'👥 Всего пользователей: {stats["total_users"]}\n'
+    response += f'🟢 Активных пользователей (5+ поисков): {stats["active_users"]}\n'
     response += f'🔍 Всего поисков: {stats["total_searches"]}\n'
+    response += f'🔄 Уникальных запросов: {stats["unique_searches"]}\n'
+    response += f'📊 Средне поисков/пользователя: {stats["avg_searches_per_user"]}\n'
     response += f'🎵 Всего просмотров треков: {stats["total_track_views"]}\n'
-    response += '\n' + '='*40 + '\n\n'
+    response += f'👁 Средне просмотров/поиск: {stats["avg_views_per_search"]}\n'
+    response += '\n' + '='*50 + '\n\n'
     
-    response += '🏆 Топ 10 активных пользователей:\n'
+    response += '🏆 ТОП 10 АКТИВНЫХ ПОЛЬЗОВАТЕЛЕЙ:\n'
     for i, (uid, username, first_name, uses, searches) in enumerate(stats['top_users'], 1):
         username_str = f'@{username}' if username else f'{first_name}'
-        response += f'{i}. {username_str} - использований: {uses}, поисков: {searches}\n'
+        response += f'{i}. {username_str}\n'
+        response += f'   💬 {uses} взаимодействий | 🔍 {searches} поисков\n'
     
-    response += '\n' + '='*40 + '\n\n'
-    response += '🔥 Топ 10 популярных запросов:\n'
+    response += '\n' + '='*50 + '\n\n'
+    response += '🔥 ТОП 10 ПОПУЛЯРНЫХ ЗАПРОСОВ:\n'
     for i, (query, count) in enumerate(stats['popular_queries'], 1):
         response += f'{i}. "{query}" - {count} поиск(ов)\n'
+    
+    if stats['popular_artists']:
+        response += '\n' + '='*50 + '\n\n'
+        response += '⭐ ТОП 5 ПОПУЛЯРНЫХ ИСПОЛНИТЕЛЕЙ:\n'
+        for i, (artist, count) in enumerate(stats['popular_artists'], 1):
+            response += f'{i}. {artist} - {count} просмотров\n'
     
     await update.message.reply_text(response)
     logger.info(f'Admin stats requested by user {user_id}')
@@ -326,7 +364,7 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cur = conn.cursor()
         
         cur.execute("""
-            SELECT username, first_name, total_uses, total_searches 
+            SELECT username, first_name, total_uses, total_searches, created_at 
             FROM users 
             WHERE user_id = %s
         """, (user_id,))
@@ -338,17 +376,9 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.close()
             return
         
-        username, first_name, total_uses, total_searches = result
+        username, first_name, total_uses, total_searches, created_at = result
         
-        cur.execute("""
-            SELECT track_title, track_artists, created_at 
-            FROM track_views 
-            WHERE user_id = %s 
-            ORDER BY created_at DESC 
-            LIMIT 10
-        """, (user_id,))
-        recent_tracks = cur.fetchall()
-        
+        # Top queries
         cur.execute("""
             SELECT query, COUNT(*) as count 
             FROM searches 
@@ -359,25 +389,51 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """, (user_id,))
         my_queries = cur.fetchall()
         
+        # Track views stats
+        cur.execute("""
+            SELECT COUNT(*) FROM track_views 
+            WHERE user_id = %s
+        """, (user_id,))
+        total_track_views = cur.fetchone()[0]
+        
+        # Popular artists
+        cur.execute("""
+            SELECT track_artists, COUNT(*) as count 
+            FROM track_views 
+            WHERE user_id = %s AND track_artists IS NOT NULL AND track_artists != ''
+            GROUP BY track_artists 
+            ORDER BY count DESC 
+            LIMIT 3
+        """, (user_id,))
+        favorite_artists = cur.fetchall()
+        
+        # Calculate average searches
+        avg_per_session = round(total_searches / total_uses, 2) if total_uses > 0 else 0
+        
         cur.close()
         conn.close()
         
-        response = f'📈 Ваша статистика:\n\n'
-        response += f'👤 Имя: {first_name}\n'
+        response = f'📊 ВАШ ПРОФИЛЬ И СТАТИСТИКА\n\n'
+        response += f'👤 {first_name}\n'
         if username:
-            response += f'📱 Юзернейм: @{username}\n'
+            response += f'📱 @{username}\n'
+        response += f'📅 На боте с: {created_at.strftime("%d.%m.%Y") if created_at else "неизвестно"}\n\n'
+        
+        response += '📈 АКТИВНОСТЬ:\n'
+        response += f'💬 Всего взаимодействий: {total_uses}\n'
         response += f'🔍 Всего поисков: {total_searches}\n'
-        response += f'💬 Использований бота: {total_uses}\n'
+        response += f'🎵 Просмотров треков: {total_track_views}\n'
+        response += f'📊 Поисков за сеанс: {avg_per_session}\n\n'
         
         if my_queries:
-            response += f'\n🔥 Ваши популярные запросы:\n'
-            for query, count in my_queries:
-                response += f'• "{query}" - {count} раз\n'
+            response += f'🔥 ВАШ ТОП ЗАПРОСОВ:\n'
+            for i, (query, count) in enumerate(my_queries, 1):
+                response += f'{i}. "{query}" - {count} раз\n'
         
-        if recent_tracks:
-            response += f'\n🎵 Последние просмотренные треки:\n'
-            for track, artists, created_at in recent_tracks[:5]:
-                response += f'• {artists} - {track}\n'
+        if favorite_artists:
+            response += f'\n⭐ ВАШИ ЛЮБИМЫЕ ИСПОЛНИТЕЛИ:\n'
+            for i, (artist, count) in enumerate(favorite_artists, 1):
+                response += f'{i}. {artist} - {count} просмотров\n'
         
         await update.message.reply_text(response)
         
