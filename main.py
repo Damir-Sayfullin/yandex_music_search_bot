@@ -5,6 +5,8 @@ import time
 import requests
 from aiohttp import web
 import asyncio
+import psycopg2
+from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from yandex_music import Client
@@ -16,8 +18,73 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 yandex_client = None
+db_connection = None
+
+def get_db_connection():
+    try:
+        conn = psycopg2.connect(os.getenv('DATABASE_URL'))
+        return conn
+    except Exception as e:
+        logger.error(f'Database connection error: {e}')
+        return None
+
+def log_user(user_id, username, first_name, last_name):
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return
+        cur = conn.cursor()
+        cur.execute(
+            'INSERT INTO users (user_id, username, first_name, last_name, total_uses) VALUES (%s, %s, %s, %s, 1) '
+            'ON CONFLICT (user_id) DO UPDATE SET total_uses = total_uses + 1',
+            (user_id, username, first_name, last_name)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f'Error logging user: {e}')
+
+def log_search(user_id, query, results_count):
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return
+        cur = conn.cursor()
+        cur.execute(
+            'UPDATE users SET total_searches = total_searches + 1 WHERE user_id = %s',
+            (user_id,)
+        )
+        cur.execute(
+            'INSERT INTO searches (user_id, query, results_count) VALUES (%s, %s, %s)',
+            (user_id, query, results_count)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f'Error logging search: {e}')
+
+def log_track_view(user_id, track_title, track_artists, query):
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return
+        cur = conn.cursor()
+        cur.execute(
+            'INSERT INTO track_views (user_id, track_title, track_artists, query) VALUES (%s, %s, %s, %s)',
+            (user_id, track_title, track_artists, query)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f'Error logging track view: {e}')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    log_user(user.id, user.username, user.first_name, user.last_name)
+    
     await update.message.reply_text(
         '🎵 Привет! Я бот для поиска музыки в Яндекс.Музыке\n\n'
         'Отправьте мне название трека или исполнителя, и я найду музыку для вас!\n\n'
@@ -43,6 +110,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def search_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global yandex_client
+    
+    user = update.message.from_user
+    log_user(user.id, user.username, user.first_name, user.last_name)
     
     if not yandex_client:
         await update.message.reply_text(
@@ -70,6 +140,7 @@ async def search_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         tracks = search_result.tracks.results[:5]
+        log_search(user.id, query, len(tracks))
         
         response = f'🎵 Найдено треков: {len(tracks)}\n\n'
         
@@ -78,6 +149,8 @@ async def search_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
             duration_seconds = track.duration_ms // 1000 if track.duration_ms else 0
             minutes = duration_seconds // 60
             seconds = duration_seconds % 60
+            
+            log_track_view(user.id, track.title, artists, query)
             
             response += f'{i}. {artists} - {track.title}\n'
             response += f'   ⏱ {minutes}:{seconds:02d}\n'
@@ -100,6 +173,9 @@ async def search_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global yandex_client
     
+    user = update.message.from_user
+    log_user(user.id, user.username, user.first_name, user.last_name)
+    
     if not yandex_client:
         await update.message.reply_text(
             '❌ Яндекс.Музыка не настроена.\n'
@@ -119,6 +195,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         tracks = search_result.tracks.results[:3]
+        log_search(user.id, query, len(tracks))
         
         response = f'🎵 Найдено:\n\n'
         
@@ -127,6 +204,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             duration_seconds = track.duration_ms // 1000 if track.duration_ms else 0
             minutes = duration_seconds // 60
             seconds = duration_seconds % 60
+            
+            log_track_view(user.id, track.title, artists, query)
             
             response += f'{i}. {artists} - {track.title}\n'
             response += f'   ⏱ {minutes}:{seconds:02d}\n'
