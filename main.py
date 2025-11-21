@@ -781,8 +781,8 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = '📊 ОБЩАЯ СТАТИСТИКА БОТА\n\n'
     response += '📈 Ключевые метрики:\n'
     response += f'👥 Всего пользователей: {stats["total_users"]}\n'
-    response += f'🔍 Всего поисков: {stats["total_searches"]}\n'
     response += f'💬 Всего взаимодействий: {stats["total_uses"]}\n'
+    response += f'🔍 Всего поисков: {stats["total_searches"]}\n'
     response += f'📊 Средне поисков/пользователя: {stats["avg_searches_per_user"]}\n'
     response += '\n' + '='*50 + '\n\n'
     
