@@ -26,6 +26,7 @@ vk_token = None
 def search_vk(query):
     """Search music in VKontakte"""
     if not vk_token:
+        logger.warning('VK token not set')
         return None
     try:
         url = 'https://api.vk.com/method/audio.search'
@@ -36,10 +37,18 @@ def search_vk(query):
             'v': '5.131'
         }
         response = requests.get(url, params=params, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if 'response' in data and 'items' in data['response']:
-                return data['response']['items']
+        data = response.json()
+        logger.info(f'VK API response: {data}')
+        
+        if 'error' in data:
+            logger.error(f'VK API error: {data["error"]}')
+            return None
+        
+        if 'response' in data:
+            items = data['response'].get('items', []) if isinstance(data['response'], dict) else []
+            logger.info(f'VK found {len(items)} tracks')
+            return items if items else None
+        
         return None
     except Exception as e:
         logger.error(f'VK search error: {e}')
