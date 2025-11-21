@@ -1,5 +1,7 @@
 import os
 import logging
+import asyncio
+from aiohttp import web
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from yandex_music import Client
@@ -78,7 +80,11 @@ async def search_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response += f'   ⏱ {minutes}:{seconds:02d}\n'
             
             if track.albums and len(track.albums) > 0:
+                album_id = track.albums[0].id
+                track_id = track.id
+                track_url = f'https://music.yandex.ru/album/{album_id}/track/{track_id}'
                 response += f'   💿 {track.albums[0].title}\n'
+                response += f'   🔗 {track_url}\n'
             
             response += '\n'
         
@@ -120,7 +126,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             seconds = duration_seconds % 60
             
             response += f'{i}. {artists} - {track.title}\n'
-            response += f'   ⏱ {minutes}:{seconds:02d}\n\n'
+            response += f'   ⏱ {minutes}:{seconds:02d}\n'
+            
+            if track.albums and len(track.albums) > 0:
+                album_id = track.albums[0].id
+                track_id = track.id
+                track_url = f'https://music.yandex.ru/album/{album_id}/track/{track_id}'
+                response += f'   🔗 {track_url}\n'
+            
+            response += '\n'
         
         await update.message.reply_text(response)
         
@@ -131,7 +145,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f'Update {update} caused error {context.error}')
 
-def main():
+async def health_check(request):
+    return web.Response(text='Bot is alive!')
+
+async def start_webserver():
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
+    logger.info('Web server started on port 8080')
+    print('🌐 Keep-alive веб-сервер запущен на порту 8080')
+
+async def main():
     global yandex_client
     
     token = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -156,6 +184,8 @@ def main():
         logger.warning('YANDEX_MUSIC_TOKEN not found - music search disabled')
         print('⚠️ YANDEX_MUSIC_TOKEN не найден - поиск музыки отключен')
     
+    await start_webserver()
+    
     application = Application.builder().token(token).build()
     
     application.add_handler(CommandHandler("start", start))
@@ -168,7 +198,7 @@ def main():
     logger.info('Бот запущен!')
     print('🤖 Бот успешно запущен и готов к работе!')
     
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    await application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
