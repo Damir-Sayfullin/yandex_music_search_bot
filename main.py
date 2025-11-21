@@ -1,7 +1,8 @@
 import os
 import logging
-import asyncio
+import threading
 from aiohttp import web
+import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from yandex_music import Client
@@ -159,7 +160,13 @@ async def start_webserver():
     logger.info('Web server started on port 8080')
     print('🌐 Keep-alive веб-сервер запущен на порту 8080')
 
-async def main():
+def run_webserver():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(start_webserver())
+    loop.run_forever()
+
+def main():
     global yandex_client
     
     token = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -184,7 +191,8 @@ async def main():
         logger.warning('YANDEX_MUSIC_TOKEN not found - music search disabled')
         print('⚠️ YANDEX_MUSIC_TOKEN не найден - поиск музыки отключен')
     
-    await start_webserver()
+    webserver_thread = threading.Thread(target=run_webserver, daemon=True)
+    webserver_thread.start()
     
     application = Application.builder().token(token).build()
     
@@ -198,7 +206,7 @@ async def main():
     logger.info('Бот запущен!')
     print('🤖 Бот успешно запущен и готов к работе!')
     
-    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
