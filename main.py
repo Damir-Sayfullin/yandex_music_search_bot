@@ -36,7 +36,7 @@ def log_user(user_id, username, first_name, last_name):
         cur = conn.cursor()
         cur.execute(
             'INSERT INTO users (user_id, username, first_name, last_name, total_uses) VALUES (%s, %s, %s, %s, 1) '
-            'ON CONFLICT (user_id) DO UPDATE SET total_uses = total_uses + 1',
+            'ON CONFLICT (user_id) DO UPDATE SET total_uses = users.total_uses + 1',
             (user_id, username, first_name, last_name)
         )
         conn.commit()
