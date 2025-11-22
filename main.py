@@ -103,6 +103,97 @@ def log_track_view(user_id, track_title, track_artists, query):
     except Exception as e:
         logger.error(f'Error logging track view: {e}')
 
+def init_db():
+    """Initialize database tables if they don't exist"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            logger.error('Failed to connect to database for initialization')
+            return False
+        cur = conn.cursor()
+        
+        # Create users table
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                username VARCHAR(255),
+                first_name VARCHAR(255),
+                last_name VARCHAR(255),
+                total_uses INT DEFAULT 0,
+                total_searches INT DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create searches table
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS searches (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT REFERENCES users(user_id),
+                query TEXT,
+                results_count INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create track_views table
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS track_views (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT REFERENCES users(user_id),
+                track_title TEXT,
+                track_artists TEXT,
+                query TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create user_actions table
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS user_actions (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT REFERENCES users(user_id),
+                action_type VARCHAR(255),
+                action_details TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create admins table
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS admins (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT REFERENCES users(user_id),
+                added_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create bot_sessions table
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS bot_sessions (
+                id SERIAL PRIMARY KEY,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create indexes
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_searches_user_id ON searches(user_id)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_track_views_user_id ON track_views(user_id)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_user_actions_user_id ON user_actions(user_id)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_admins_user_id ON admins(user_id)')
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info('Database tables initialized successfully')
+        print('✅ Таблицы БД инициализированы!')
+        return True
+    except Exception as e:
+        logger.error(f'Error initializing database: {e}')
+        print(f'⚠️ Ошибка инициализации БД: {e}')
+        return False
+
 def log_bot_startup():
     try:
         conn = get_db_connection()
@@ -1008,6 +1099,9 @@ def main():
     
     ping_thread = threading.Thread(target=self_ping, daemon=True)
     ping_thread.start()
+    
+    # Initialize database tables
+    init_db()
     
     # Log bot startup to database
     log_bot_startup()
